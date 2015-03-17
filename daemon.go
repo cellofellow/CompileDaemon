@@ -102,15 +102,16 @@ var (
 	flag_command      = flag.String("command", "", "Command to run and restart after build")
 	flag_recursive    = flag.Bool("recursive", true, "Watch all dirs. recursively")
 	flag_build        = flag.String("build", "go build", "Command to rebuild after changes")
-	flag_color        = flag.Bool("color", false, "Colorize output for CompileDaemon status messages")
-	flag_logprefix    = flag.Bool("log-prefix", true, "Print log timestamps and subprocess stderr/stdout output")
-	flag_gracefulkill = flag.Bool("graceful-kill", false, "Gracefully attempt to kill the child process by sending a SIGTERM first")
+	flag_color        = flag.Bool("color", true, "Colorize output for CompileDaemon status messages")
+	flag_gracefulkill = flag.Bool("graceful-kill", true, "Gracefully attempt to kill the child process by sending a SIGTERM first")
 
 	// initialized in main() due to custom type.
-	flag_excludedDirs globList
+	flag_excludedDirs  globList
 	flag_excludedFiles globList
 	flag_includedFiles globList
 )
+
+type colorFunc func(string, ...interface{}) string
 
 func okColor(format string, args ...interface{}) string {
 	if *flag_color {
@@ -140,12 +141,12 @@ func build() bool {
 
 	cmd := exec.Command(args[0], args[1:]...)
 
-	cmd.Dir = *flag_directory
+	cmd.Dir = "."
 
 	output, err := cmd.CombinedOutput()
 
 	if err == nil {
-		log.Println(okColor("Build ok."))
+		log.Println(okColor("Build ok.\n"), okColor(string(output)))
 	} else {
 		log.Println(failColor("Error while building:\n"), failColor(string(output)))
 	}
@@ -180,7 +181,7 @@ func builder(jobs <-chan string, buildDone chan<- struct{}) {
 }
 
 func logger(pipeChan <-chan io.ReadCloser) {
-	dumper := func(pipe io.ReadCloser, prefix string) {
+	dumper := func(pipe io.ReadCloser, cf colorFunc) {
 		reader := bufio.NewReader(pipe)
 
 	readloop:
@@ -191,20 +192,16 @@ func logger(pipeChan <-chan io.ReadCloser) {
 				break readloop
 			}
 
-			if *flag_logprefix {
-				log.Print(prefix, " ", line)
-			} else {
-				log.Print(line)
-			}
+			log.Print(cf(line))
 		}
 	}
 
 	for {
 		pipe := <-pipeChan
-		go dumper(pipe, "stdout:")
+		go dumper(pipe, okColor)
 
 		pipe = <-pipeChan
-		go dumper(pipe, "stderr:")
+		go dumper(pipe, failColor)
 	}
 }
 
@@ -316,10 +313,7 @@ func main() {
 	flag.Var(&flag_includedFiles, "include", " Watch files matching this name")
 
 	flag.Parse()
-
-	if !*flag_logprefix {
-		log.SetFlags(0)
-	}
+	log.SetFlags(0)
 
 	if *flag_directory == "" {
 		fmt.Fprintf(os.Stderr, "-directory=... is required.\n")
